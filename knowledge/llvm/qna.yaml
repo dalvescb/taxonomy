@@ -1,0 +1,30 @@
+created_by: ALWT
+domain: llvm
+seed_examples:
+    - context:
+      questions_and_answers:
+        - question:
+          answer: |
+
+        - question:
+          answer: |
+
+        - question:
+          answer: |
+
+        - question:
+          answer: |
+
+        - question:
+          answer: |
+
+        - question:
+          answer: |
+
+document_outline: |
+  Information about how to generate llvm tests using FileCheck
+document:
+    repo: https://github.com/llvm/llvm-project
+    commit: 40b0619a53231eafaa879d085b7a7a10441c7f34
+    patterns:
+        - llvm/docs/CommandGuide/FileCheck.rst
