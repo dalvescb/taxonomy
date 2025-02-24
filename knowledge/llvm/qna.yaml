@@ -2,25 +2,192 @@ created_by: ALWT
 domain: llvm
 seed_examples:
     - context:
+FileCheck is typically used from LLVM regression tests, being invoked on the RUN
+line of the test.  A simple example of using FileCheck from a RUN line looks
+like this:
+
+.. code-block:: llvm
+
+   ; RUN: llvm-as < %s | llc -march=x86-64 | FileCheck %s
+
+This syntax says to pipe the current file ("``%s``") into ``llvm-as``, pipe
+that into ``llc``, then pipe the output of ``llc`` into ``FileCheck``.  This
+means that FileCheck will be verifying its standard input (the llc output)
+against the filename argument specified (the original ``.ll`` file specified by
+"``%s``").  To see how this works, let's look at the rest of the ``.ll`` file
+(after the RUN line):
+
+.. code-block:: llvm
+
+   define void @sub1(i32* %p, i32 %v) {
+   entry:
+   ; CHECK: sub1:
+   ; CHECK: subl
+           %0 = tail call i32 @llvm.atomic.load.sub.i32.p0i32(i32* %p, i32 %v)
+           ret void
+   }
+
+   define void @inc4(i64* %p) {
+   entry:
+   ; CHECK: inc4:
+   ; CHECK: incq
+           %0 = tail call i64 @llvm.atomic.load.add.i64.p0i64(i64* %p, i64 1)
+           ret void
+   }
+
+Here you can see some "``CHECK:``" lines specified in comments.  Now you can
+see how the file is piped into ``llvm-as``, then ``llc``, and the machine code
+output is what we are verifying.  FileCheck checks the machine code output to
+verify that it matches what the "``CHECK:``" lines specify.
       questions_and_answers:
-        - question:
+        - question: |
+            Generate an LLVM IR test that tests the use of nounwind on apple-darwin
           answer: |
+   ; RUN: llvm-as < %s | llc -mtriple=i686-apple-darwin9 -mattr=sse41 \
+   ; RUN:              | FileCheck %s -check-prefix=X32
+   ; RUN: llvm-as < %s | llc -mtriple=x86_64-apple-darwin9 -mattr=sse41 \
+   ; RUN:              | FileCheck %s -check-prefix=X64
 
-        - question:
+   define <4 x i32> @pinsrd_1(i32 %s, <4 x i32> %tmp) nounwind {
+           %tmp1 = insertelement <4 x i32>; %tmp, i32 %s, i32 1
+           ret <4 x i32> %tmp1
+   ; X32: pinsrd_1:
+   ; X32:    pinsrd $1, 4(%esp), %xmm0
+
+   ; X64: pinsrd_1:
+   ; X64:    pinsrd $1, %edi, %xmm0
+   }
+        - question: |
+            Generate an LLVM IR test that tests removing a pass that removes aliases
           answer: |
+; RUN: opt < %s -aa-pipeline=basic-aa -passes=aa-eval -print-no-aliases -print-may-aliases -print-must-aliases -disable-output 2>&1 | FileCheck %s
+target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 
-        - question:
+%T = type { i32, [10 x i8] }
+
+; CHECK:     Function: test
+; CHECK-NOT:   MayAlias:
+
+define void @test(ptr %P) {
+  %C = getelementptr %T, ptr %P, i64 0, i32 1
+  %D = getelementptr %T, ptr %P, i64 0, i32 1, i64 0
+  %E = getelementptr %T, ptr %P, i64 0, i32 1, i64 5
+  ret void
+}
+        - question: |
+            Generate an LLVM IR test that tests vector loads and stores costs on powerpc
           answer: |
+target datalayout = "E-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-f128:128:128-v128:128:128-n32:64"
+target triple = "powerpc64-unknown-linux-gnu"
 
-        - question:
+define i32 @stores(i32 %arg) {
+
+  ; CHECK: cost of 1 {{.*}} store
+  store i8 undef, ptr undef, align 4
+  ; CHECK: cost of 1 {{.*}} store
+  store i16 undef, ptr undef, align 4
+  ; CHECK: cost of 1 {{.*}} store
+  store i32 undef, ptr undef, align 4
+  ; CHECK: cost of 2 {{.*}} store
+  store i64 undef, ptr undef, align 4
+  ; CHECK: cost of 4 {{.*}} store
+  store i128 undef, ptr undef, align 4
+
+  ret i32 undef
+}
+define i32 @loads(i32 %arg) {
+  ; CHECK: cost of 1 {{.*}} load
+  load i8, ptr undef, align 4
+  ; CHECK: cost of 1 {{.*}} load
+  load i16, ptr undef, align 4
+  ; CHECK: cost of 1 {{.*}} load
+  load i32, ptr undef, align 4
+  ; CHECK: cost of 2 {{.*}} load
+  load i64, ptr undef, align 4
+  ; CHECK: cost of 4 {{.*}} load
+  load i128, ptr undef, align 4
+
+  ; FIXME: There actually are sub-vector Altivec loads, and so we could handle
+  ; this with a small expense, but we don't currently.
+  ; CHECK: cost of 42 {{.*}} load
+  load <4 x i16>, ptr undef, align 2
+
+  ; CHECK: cost of 2 {{.*}} load
+  load <4 x i32>, ptr undef, align 4
+
+  ; CHECK: cost of 46 {{.*}} load
+  load <3 x float>, ptr undef, align 1
+
+  ret i32 undef
+}
+
+define i32 @partialvector32(i32 %arg) #0 {
+
+  ; CHECK: cost of 1 {{.*}} store
+  store <4 x i8> undef, ptr undef, align 16
+
+  ret i32 undef
+}
+
+define i32 @partialvector64(i32 %arg) #1 {
+
+  ; CHECK: cost of 1 {{.*}} store
+  store <4 x i16> undef, ptr undef, align 16
+
+  ret i32 undef
+}
+
+attributes #0 = { "target-features"="+power8-vector,+vsx" }
+
+attributes #1 = { "target-features"="+vsx" }
+        - question: |
+            Generate an LLVM IR test that tests that tests linking with LTO on ibm aix
           answer: |
+; RUN: rm -rf %t
+; RUN: mkdir %t
+; RUN: llvm-as %s -o %t/bc.bc
+; RUN: llvm-lto -exported-symbol var -O0 %t/bc.bc -o %t/default.o
+; RUN: llvm-lto -exported-symbol var -O0 --data-sections=1 %t/bc.bc -o \
+; RUN:   %t/data-sections.o
+; RUN: llvm-lto -exported-symbol var -O0 --data-sections=0 %t/bc.bc -o \
+; RUN:   %t/no-data-sections.o
+; RUN: llvm-objdump -t %t/default.o | FileCheck %s
+; RUN: llvm-objdump -t %t/data-sections.o | FileCheck %s
+; RUN: llvm-objdump -t %t/no-data-sections.o | FileCheck --check-prefix \
+; RUN:   CHECK-NO-DATA-SECTIONS %s
 
-        - question:
+target triple = "powerpc-ibm-aix7.2.0.0"
+
+@var = global i32 0
+
+; CHECK-NOT:              00000000 g O .data (csect: .data) [[#%x,]] var
+
+; CHECK-NO-DATA-SECTIONS: 00000000 g O .data (csect: .data) [[#%x,]] var
+        - question: |
+            Generate an LLVM IR test that tests if a floating point variable becomes INF
           answer: |
+; The output formater prints out 1.0e100 as Inf!
+;
+; RUN: llvm-as < %s | llvm-dis | llvm-as | llvm-dis | grep 0x7FF0000000000000
+; RUN: verify-uselistorder %s
 
-        - question:
+define float @test() {
+        %tmp = fmul float 0x7FF0000000000000, 1.000000e+01               ; <float> [#uses=1]
+        ret float %tmp
+}
+        - question: |
+            Generate an LLVM IR test that tests constant expression casting
           answer: |
+; RUN: llvm-as < %s | llvm-dis | not grep " bitcast ("
+; RUN: verify-uselistorder %s
 
+@.Base64_1 = external constant [4 x i8]         ; <ptr> [#uses=1]
+
+define i8 @test(i8 %Y) {
+        %X = bitcast i8 %Y to i8                ; <i8> [#uses=1]
+        %tmp.13 = add i8 %X, sub (i8 0, i8 ptrtoint (ptr @.Base64_1 to i8))     ; <i8> [#uses=1]
+        ret i8 %tmp.13
+}
 document_outline: |
   Information about how to generate llvm tests using FileCheck
 document:
